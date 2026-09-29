@@ -1115,15 +1115,31 @@
     100% { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(0.3); }
   }
 
+  /* ===== ТАБЛО ОЧКОВ (снизу по центру) ===== */
   #scoreboard {
-    position: absolute; top: 12px; left: 12px;
-    padding: 8px 14px;
-    background: rgba(20,10,40,0.85);
-    border-radius: 12px; color: #fff; font-size: 13px; font-weight: bold;
-    z-index: 50; line-height: 1.4; backdrop-filter: blur(4px);
+    position: absolute;
+    bottom: 12px; left: 50%;
+    transform: translateX(-50%);
+    padding: 8px 18px;
+    background: rgba(20,10,40,0.9);
+    border-radius: 12px;
+    color: #fff;
+    font-size: 15px;
+    font-weight: bold;
+    z-index: 55;
+    line-height: 1.3;
+    backdrop-filter: blur(4px);
     border: 3px solid #ffd54f;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
-    text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.6), 0 0 20px rgba(255,213,79,0.25);
+    text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+    white-space: nowrap;
+    pointer-events: none;
+    letter-spacing: 0.5px;
+  }
+  #scoreboard span {
+    font-family: 'Arial Black', Arial, sans-serif;
+    font-size: 17px;
+    text-shadow: 0 0 8px currentColor;
   }
 
   .fan-emoji {
@@ -1165,6 +1181,55 @@
     #powerBar { height: 34px; }
     #hitBtn { padding: 10px; font-size: 15px; }
     #stands { height: 28%; }
+  }
+
+  /* ===== ОПТИМИЗАЦИЯ ДЛЯ МОБИЛЬНЫХ ===== */
+  @media (max-width: 768px), (pointer: coarse) {
+    /* Убираем тяжёлые GPU-фильтры */
+    .spotlight { filter: none; opacity: 0.6; }
+    #opponentWrap { filter: none; }
+    #myArm, #enemyArm { filter: none; }
+    .fan { animation-duration: 4s; }
+    .fan .fan-hand { animation: none; }
+    .stand-row.back .fan { filter: brightness(0.55); }
+    .stand-row.mid .fan { filter: brightness(0.78); }
+    .fan-emoji { filter: none; }
+
+    /* Отключаем дорогой mix-blend-mode */
+    .bruise { mix-blend-mode: normal; opacity: 0; }
+    .bruise.show { opacity: 0.65; }
+
+    /* Облегчаем backdrop-filter */
+    #panel { backdrop-filter: none; background: rgba(20,10,40,0.95); }
+    #scoreboard { backdrop-filter: none; background: rgba(20,10,40,0.95); }
+    #menuBtnSmall { backdrop-filter: none; background: rgba(20,10,40,0.95); }
+    #overlay { backdrop-filter: none; }
+
+    /* Облегчаем тени */
+    .opponent-head { box-shadow: inset -20px -15px 40px rgba(0,0,0,0.15); }
+    #opponent { filter: none; }
+
+    /* Уменьшаем анимацию тряски */
+    #scene.shake { animation-duration: 0.4s; }
+    .opponent-head.shake { animation-duration: 0.45s; }
+  }
+
+  /* Очень маленькие экраны — ещё сильнее режем */
+  @media (max-width: 480px) {
+    .fan { width: 22px; height: 22px; }
+    .fan .fan-head { width: 12px; height: 12px; bottom: 7px; }
+    .fan .fan-hair { width: 14px; height: 7px; bottom: 16px; }
+    .fan .fan-body { width: 14px; height: 9px; }
+    .fan .fan-eye,
+    .fan .fan-mouth,
+    .fan .fan-hand { display: none; }
+
+    #scoreboard {
+      font-size: 14px;
+      padding: 7px 14px;
+      bottom: 8px;
+    }
+    #scoreboard span { font-size: 16px; }
   }
 </style>
 </head>
@@ -1392,13 +1457,14 @@ const game = {
 };
 const WIN_SCORE = 30;
 
+// Определяем мобильное устройство один раз
+const IS_MOBILE = window.matchMedia('(max-width: 768px), (pointer: coarse)').matches;
+
 /* ============================================================
    АВТООПРЕДЕЛЕНИЕ: код из URL
-   Поддерживаем: #room=CODE, ?room=CODE, #CODE, ?code=CODE
    ============================================================ */
 function parseRoomFromUrl() {
   try {
-    // Проверяем hash: #room=CODE или #CODE
     const hash = (window.location.hash || '').replace(/^#/, '');
     if (hash) {
       const m1 = hash.match(/^room[=:]([A-Z0-9]{4,8})$/i);
@@ -1406,7 +1472,6 @@ function parseRoomFromUrl() {
       const m2 = hash.match(/^([A-Z0-9]{4,8})$/i);
       if (m2) return m2[1].toUpperCase();
     }
-    // Проверяем query: ?room=CODE или ?code=CODE
     const search = (window.location.search || '');
     const m3 = search.match(/[?&](?:room|code)=([A-Z0-9]{4,8})/i);
     if (m3) return m3[1].toUpperCase();
@@ -1415,10 +1480,7 @@ function parseRoomFromUrl() {
 }
 
 /* ============================================================
-   СЕТЬ (PeerJS) — стабильное P2P-подключение
-   GitHub Pages используется только для загрузки игры.
-   PeerJS Cloud используется как signaling-сервер, а сама игра
-   идёт напрямую между браузерами через WebRTC.
+   СЕТЬ (PeerJS)
    ============================================================ */
 let peer = null;
 let conn = null;
@@ -1445,7 +1507,6 @@ const ICE_CONFIG = {
 };
 
 function generateRoomCode() {
-  // 8 символов заметно уменьшают вероятность коллизии фиксированного Peer ID.
   const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
   let code = '';
   for (let i = 0; i < 8; i++) code += chars[Math.floor(Math.random() * chars.length)];
@@ -1500,7 +1561,6 @@ function createPeer(id) {
   });
 }
 
-/* Хост: создаём комнату с фиксированным Peer ID. */
 function createHostPeer(code, onReady, onError) {
   destroyNetwork();
 
@@ -1521,7 +1581,6 @@ function createHostPeer(code, onReady, onError) {
   peer.on('connection', (incoming) => {
     console.log('[HOST] Входящее подключение:', incoming.peer);
 
-    // В комнате может быть только один соперник.
     if (conn && conn.open) {
       try { incoming.close(); } catch (e) {}
       return;
@@ -1542,13 +1601,11 @@ function createHostPeer(code, onReady, onError) {
 
   peer.on('disconnected', () => {
     console.warn('[HOST] Потеряна связь с PeerJS Cloud');
-    // P2P-соединение при этом может продолжать жить.
     if (!peer.destroyed && !peer.disconnected) return;
     try { peer.reconnect(); } catch (e) {}
   });
 }
 
-/* Клиент: создаём собственный Peer ID и подключаемся к комнате. */
 function createClientPeer(targetCode, onError) {
   destroyNetwork();
 
@@ -1600,7 +1657,6 @@ function bindConnection() {
   const boundConnection = conn;
 
   boundConnection.on('open', () => {
-    // Игнорируем старый объект соединения.
     if (conn !== boundConnection) return;
 
     clearConnectionTimeout();
@@ -1608,9 +1664,6 @@ function bindConnection() {
     networkReady = true;
     setOnlineStatus('✓ Соперник подключён. Подготовка игры...', 'ok');
 
-    // Важный момент: игра НЕ стартует просто от conn.open.
-    // Сначала делаем handshake, чтобы оба клиента гарантированно
-    // знали роль и начали раунд согласованно.
     if (networkRole === 'client') {
       sendNetwork({
         type: 'hello',
@@ -1679,8 +1732,6 @@ function handleNetworkData(data) {
 
   switch (data.type) {
     case 'hello':
-      // Только хост запускает матч. Это устраняет рассинхрон при
-      // разной скорости загрузки двух вкладок.
       if (networkRole === 'host' && networkReady) {
         sendNetwork({
           type: 'start',
@@ -1701,8 +1752,6 @@ function handleNetworkData(data) {
 
     case 'hit':
       if (game.mode !== 'online' || !game.running || game.roundOver) return;
-      // Клиентские данные принимаются только когда сейчас действительно
-      // ход соперника. Это защищает от двойных/запаздывающих пакетов.
       if (game.turn !== 'enemy') return;
       receiveOpponentHit(data.power, data.points, data.zoneName);
       break;
@@ -1798,7 +1847,6 @@ document.getElementById('btnCloseOnline').addEventListener('click', () => {
   closeOnlineModal();
 });
 
-/* СОЗДАТЬ */
 document.getElementById('btnCreateRoom').addEventListener('click', () => {
   ensureAudio();
   setOnlineStatus('<span class="spinner"></span>Создание комнаты...');
@@ -1831,7 +1879,6 @@ document.getElementById('btnCancelHost').addEventListener('click', () => {
   showOnlineChoose();
 });
 
-/* Копировать */
 document.getElementById('btnCopyLink').addEventListener('click', () => {
   const link = shareLinkBox.dataset.link || shareLinkBox.textContent;
   if (!link) return;
@@ -1863,7 +1910,6 @@ shareLinkBox.addEventListener('click', () => {
   document.getElementById('btnCopyLink').click();
 });
 
-/* ВОЙТИ */
 document.getElementById('btnJoinRoom').addEventListener('click', () => {
   ensureAudio();
   showOnlineJoining();
@@ -1905,7 +1951,7 @@ function autoJoinFromUrl() {
   mainMenu.style.display = 'flex';
   openOnlineModal();
   showOnlineJoining(code);
-  setOnlineStatus('<span class=\"spinner\"></span>Подключаемся к комнате ' + code + '...', 'ok');
+  setOnlineStatus('<span class="spinner"></span>Подключаемся к комнате ' + code + '...', 'ok');
   game.isHost = false;
 
   createClientPeer(code, (msg) => {
@@ -1916,7 +1962,6 @@ function autoJoinFromUrl() {
   return true;
 }
 
-// Проверяем URL сразу и при изменении hash (например, если открыли ссылку в той же вкладке)
 window.addEventListener('hashchange', () => {
   if (game.mode !== 'online') {
     const code = parseRoomFromUrl();
@@ -1926,7 +1971,6 @@ window.addEventListener('hashchange', () => {
   }
 });
 
-/* МЕНЮ выход */
 document.getElementById('menuBtnSmall').addEventListener('click', () => {
   if (game.mode === 'online' && conn && conn.open) {
     if (!confirm('Выйти в меню? Соединение с соперником разорвётся.')) return;
@@ -2103,7 +2147,8 @@ function crowdReaction(power) {
     setTimeout(() => playCheerWhistle(), 500);
   }
   const emojis = ['🔥','👏','😱','💥','🤯','⭐','👊','🙌'];
-  const count = power >= 0.9 ? 10 : (power >= 0.7 ? 6 : 3);
+  let count = power >= 0.9 ? 10 : (power >= 0.7 ? 6 : 3);
+  if (IS_MOBILE) count = Math.ceil(count / 2);
   for (let i = 0; i < count; i++) {
     setTimeout(() => spawnFanEmoji(emojis[Math.floor(Math.random() * emojis.length)]), i * 60);
   }
@@ -2119,47 +2164,72 @@ function spawnFanEmoji(emoji) {
 }
 
 /* ============================================================
-   ЗРИТЕЛИ
+   ЗРИТЕЛИ (оптимизировано для мобильных)
    ============================================================ */
 (function buildCrowd() {
   const stands = document.getElementById('stands');
   const skinTones = ['#f4c39a','#e8b890','#d9a878','#c99a72','#a87850','#8b6b48'];
   const hairColors = ['#2a1a0e','#4a2a1a','#1a0f08','#6a4a2a','#8b6b48','#3a2a1a','#5a3a1a'];
   const shirtColors = ['#e74c3c','#3498db','#2ecc71','#f39c12','#9b59b6','#1abc9c','#e91e63','#ff5722','#ffc107'];
-  const rowsConfig = [
-    { count: 28, y: 'back' },
-    { count: 24, y: 'mid' },
-    { count: 20, y: 'front' },
-  ];
+
+  const isTiny = window.innerWidth < 480;
+
+  let rowsConfig;
+  if (isTiny) {
+    rowsConfig = [
+      { count: 10, y: 'back' },
+      { count: 10, y: 'mid' },
+      { count: 8,  y: 'front' },
+    ];
+  } else if (IS_MOBILE) {
+    rowsConfig = [
+      { count: 14, y: 'back' },
+      { count: 12, y: 'mid' },
+      { count: 10, y: 'front' },
+    ];
+  } else {
+    rowsConfig = [
+      { count: 28, y: 'back' },
+      { count: 24, y: 'mid' },
+      { count: 20, y: 'front' },
+    ];
+  }
+
+  const fragment = document.createDocumentFragment();
+
   rowsConfig.forEach(cfg => {
     const row = document.createElement('div');
     row.className = 'stand-row ' + cfg.y;
+    let html = '';
     for (let i = 0; i < cfg.count; i++) {
-      const fan = document.createElement('div');
-      fan.className = 'fan';
-      fan.style.setProperty('--c-skin', skinTones[Math.floor(Math.random() * skinTones.length)]);
-      fan.style.setProperty('--c-hair', hairColors[Math.floor(Math.random() * hairColors.length)]);
-      fan.style.setProperty('--c-body', shirtColors[Math.floor(Math.random() * shirtColors.length)]);
-      fan.style.animationDelay = (Math.random() * 2.5) + 's';
-      fan.style.animationDuration = (2 + Math.random() * 1.5) + 's';
-      if (cfg.y === 'back') fan.style.transform = `scale(${0.75 + Math.random() * 0.15})`;
-      else if (cfg.y === 'mid') fan.style.transform = `scale(${0.88 + Math.random() * 0.12})`;
-      else fan.style.transform = `scale(${0.95 + Math.random() * 0.15})`;
-      fan.innerHTML = `
-        <div class="fan-hair"></div>
-        <div class="fan-head">
-          <div class="fan-eye left"></div>
-          <div class="fan-eye right"></div>
-          <div class="fan-mouth"></div>
-        </div>
-        <div class="fan-body"></div>
-        <div class="fan-hand left"></div>
-        <div class="fan-hand right"></div>
-      `;
-      row.appendChild(fan);
+      const skin = skinTones[Math.floor(Math.random() * skinTones.length)];
+      const hair = hairColors[Math.floor(Math.random() * hairColors.length)];
+      const body = shirtColors[Math.floor(Math.random() * shirtColors.length)];
+      let scale;
+      if (cfg.y === 'back') scale = 0.75 + Math.random() * 0.15;
+      else if (cfg.y === 'mid') scale = 0.88 + Math.random() * 0.12;
+      else scale = 0.95 + Math.random() * 0.15;
+
+      const delay = (Math.random() * 2.5).toFixed(2);
+      const dur = (2 + Math.random() * 1.5).toFixed(2);
+
+      html += `<div class="fan" style="--c-skin:${skin};--c-hair:${hair};--c-body:${body};animation-delay:${delay}s;animation-duration:${dur}s;transform:scale(${scale.toFixed(3)})">` +
+        `<div class="fan-hair"></div>` +
+        `<div class="fan-head">` +
+        `<div class="fan-eye left"></div>` +
+        `<div class="fan-eye right"></div>` +
+        `<div class="fan-mouth"></div>` +
+        `</div>` +
+        `<div class="fan-body"></div>` +
+        `<div class="fan-hand left"></div>` +
+        `<div class="fan-hand right"></div>` +
+        `</div>`;
     }
-    stands.appendChild(row);
+    row.innerHTML = html;
+    fragment.appendChild(row);
   });
+
+  stands.appendChild(fragment);
 })();
 
 /* ============================================================
@@ -2246,6 +2316,7 @@ function triggerRedFlash() {
 }
 function spawnSparks(x, y, count) {
   count = count || 10;
+  if (IS_MOBILE) count = Math.max(4, Math.ceil(count / 2));
   for (let i = 0; i < count; i++) {
     const s = document.createElement('div');
     s.className = 'spark';
@@ -2263,7 +2334,8 @@ function spawnSparks(x, y, count) {
   }
 }
 function spawnSpit(x, y) {
-  for (let i = 0; i < 10; i++) {
+  const count = IS_MOBILE ? 5 : 10;
+  for (let i = 0; i < count; i++) {
     const s = document.createElement('div');
     s.className = 'spit';
     s.style.left = x + 'px';
@@ -2593,8 +2665,6 @@ function checkWin() {
 }
 
 function startOnlineGame() {
-  // Оставлено для совместимости со старым кодом. Реальный старт выполняется
-  // через beginOnlineGame() после handshake.
   beginOnlineGame();
 }
 
@@ -2687,7 +2757,6 @@ document.addEventListener('click', function unlockAudio() {
    СТАРТ: проверяем URL на код и автоподключаемся
    ============================================================ */
 window.addEventListener('load', () => {
-  // Небольшая задержка чтобы DOM был точно готов
   setTimeout(() => {
     const code = parseRoomFromUrl();
     if (code) {
@@ -2697,7 +2766,6 @@ window.addEventListener('load', () => {
   }, 200);
 });
 
-// Проверка сразу (на случай если load уже прошёл)
 if (document.readyState === 'complete') {
   setTimeout(() => {
     const code = parseRoomFromUrl();
